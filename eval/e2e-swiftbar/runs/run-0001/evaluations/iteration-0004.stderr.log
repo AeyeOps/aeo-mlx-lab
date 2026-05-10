@@ -1,0 +1,41 @@
+[eval] === evaluating gemma-26b-moe ===
+[eval] [gemma-26b-moe] pre-flight stop
+[eval] [gemma-26b-moe] SwiftBar click
+[eval] [gemma-26b-moe] waiting for gemma-26b-moe stack (timeout=600s)
+[eval] [gemma-26b-moe] stack ready (PID file present, healthz 200)
+[eval] [gemma-26b-moe] sampling GPU idle state for 5s
+[eval] [gemma-26b-moe] GPU idle: max_power=0.02W max_usage=0.0067
+[eval] [gemma-26b-moe] invoking semantic judge
+[eval] [gemma-26b-moe] stopping stack
+[eval] [gemma-26b-moe] pass=false instr=true norefusal=true perf=false [70.2 vs 74 tok/s, gpu=idle max_power=0.02W] sem=true [9/10] traffic=true nogaps=true
+[eval] === evaluating gemma-31b ===
+[eval] [gemma-31b] pre-flight stop
+[eval] [gemma-31b] SwiftBar click
+[eval] [gemma-31b] waiting for gemma-31b stack (timeout=600s)
+[eval] [gemma-31b] stack ready (PID file present, healthz 200)
+[eval] [gemma-31b] sampling GPU idle state for 5s
+[eval] [gemma-31b] GPU idle: max_power=0.07W max_usage=0.0221
+[eval] [gemma-31b] invoking semantic judge
+[eval] [gemma-31b] stopping stack
+[eval] [gemma-31b] pass=true instr=true norefusal=true perf=true [21.7 vs 14.4 tok/s, gpu=idle max_power=0.07W] sem=true [10/10] traffic=true nogaps=true
+[eval] === evaluating mistral-medium ===
+[eval] [mistral-medium] pre-flight stop
+[eval] [mistral-medium] SwiftBar click
+[eval] [mistral-medium] waiting for mistral-medium stack (timeout=600s)
+[eval] [mistral-medium] stack ready (PID file present, healthz 200)
+[eval] [mistral-medium] sampling GPU idle state for 5s
+[eval] [mistral-medium] GPU idle: max_power=0.08W max_usage=0.0199
+[eval] [mistral-medium] invoking semantic judge
+[eval] [mistral-medium] stopping stack
+[eval] [mistral-medium] pass=true instr=true norefusal=true perf=true [5.9 vs 3.8 tok/s, gpu=idle max_power=0.08W] sem=true [9/10] traffic=true nogaps=true
+[eval] === evaluating scout (advisory) ===
+[eval] [scout] pre-flight stop
+[eval] [scout] SwiftBar click
+[eval] [scout] waiting for scout stack (timeout=600s)
+[eval] [scout] stack ready (PID file present, healthz 200)
+[eval] [scout] sampling GPU idle state for 5s
+[eval] [scout] GPU idle: max_power=0.10W max_usage=0.0218
+[eval] [scout] invoking semantic judge
+[eval] [scout] stopping stack
+[eval] [scout] pass=true instr=true norefusal=true perf=true [30.0 vs 9.8 tok/s, gpu=idle max_power=0.10W] sem=true [10/10] traffic=true nogaps=true
+[eval] EXIT trap: stopping any running stack

@@ -1,0 +1,14 @@
+{
+  "command": "bash eval/e2e-swiftbar/evaluate.sh",
+  "output_schema": {
+    "pass": "boolean — true when all required models pass all checks",
+    "score": "float 0.0-1.0 — fraction of (model × check) pairs that pass",
+    "models": "object keyed by model name with per-check detail",
+    "scout_advisory": "object — scout result tracked separately, never blocks pass"
+  },
+  "pass_field": "pass",
+  "score_field": "score",
+  "working_directory": ".",
+  "timeout_seconds": 14400,
+  "notes": "Each model requires a full load cycle (~3-10 min). Run sequentially. SwiftBar click requires Ghostty Accessibility permission (granted)."
+}

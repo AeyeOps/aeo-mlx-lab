@@ -1,0 +1,5 @@
+#!/bin/bash
+# ghostty-run CMD [ARGS...]
+# Launch CMD inside a new Ghostty window via `open`.
+# Window closes when CMD exits.
+exec /usr/bin/open -na Ghostty.app --args -e "$@"

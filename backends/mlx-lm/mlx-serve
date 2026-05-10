@@ -1,0 +1,422 @@
+#!/usr/bin/env bash
+# mlx-serve [--stop|--status|--help] <model_name> [extra mlx_lm.server args...]
+#
+# <model_name>   single-model server for that one only
+# --stop         kills any running mlx_lm.server + shim processes
+# --status       prints whether backend and shim are running
+#
+# Dual-process model (Phase C):
+#   backend = mlx_lm.server, loopback-only on 127.0.0.1:64180
+#   shim    = shim.server   (Starlette/httpx OpenAI-compat proxy) on :64080
+#   The shim fronts the backend; clients hit :64080. Lifecycle is owned here:
+#   start backend -> probe :64180/v1/models -> start shim -> probe :64080/healthz.
+#   --stop tears down shim first (let last stream drain), then backend.
+#
+#   PID files: $MLX_PROJECT_DIR/tmp/mlx-<model>.pid + .../mlx-shim.pid
+#   Logs:      $MLX_PROJECT_DIR/tmp/mlx-<model>.log + .../shim.log
+#
+# Note: upstream mlx-lm 0.31.x's `mlx_lm.server` is **single-model only**.
+# It accepts `--model` plus a fixed set of sampling/cache flags, and has
+# **no** `--config` (YAML multi-model), no `--max-kv-size`, no `--kv-bits`,
+# no `--quantized-kv-start`. Earlier versions of this script passed those
+# flags and the server died on argparse with output redirected to the log,
+# which looked like "the launch did nothing."
+#
+# Compatible with stock macOS bash 3.2 (no associative arrays, no ${!var},
+# no process substitution, no mapfile, no coprocesses).
+
+set -eo pipefail
+
+# Resolve REPO_ROOT from this script's location, following symlinks. mlx-serve
+# is normally symlinked from ~/.local/bin into the repo's backends/mlx-lm/.
+__src="${BASH_SOURCE[0]}"
+while [ -L "$__src" ]; do
+  __dir="$(cd -P "$(dirname "$__src")" >/dev/null 2>&1 && pwd)"
+  __src="$(readlink "$__src")"
+  case "$__src" in /*) ;; *) __src="$__dir/$__src" ;; esac
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$__src")" >/dev/null 2>&1 && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+unset __src __dir
+
+# Source repo-local .env (untracked) for any local overrides. See .env.example.
+if [ -f "$REPO_ROOT/.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "$REPO_ROOT/.env"
+  set +a
+fi
+
+VENV="${VENV_DIR:-$HOME/.venvs/mlx}"
+
+# Project-local runtime dir (PID files + logs). Override with MLX_PROJECT_DIR.
+MLX_PROJECT_DIR="${MLX_PROJECT_DIR:-$REPO_ROOT}"
+export MLX_PROJECT_DIR
+MLX_TMP_DIR="$MLX_PROJECT_DIR/tmp"
+mkdir -p "$MLX_TMP_DIR"
+
+BACKEND_HOST="127.0.0.1"
+BACKEND_PORT="64180"
+SHIM_PORT="64080"
+SHIM_PID_FILE="$MLX_TMP_DIR/mlx-shim.pid"
+SHIM_LOG="$MLX_TMP_DIR/shim.log"
+
+# served_name → mlx-community model_path
+lookup_model() {
+  case "$1" in
+    scout)          echo "mlx-community/Llama-4-Scout-17B-16E-Instruct-4bit" ;;
+    mistral-medium) echo "mlx-community/Mistral-Medium-3.5-128B-4bit" ;;
+    gemma-31b)      echo "mlx-community/gemma-4-31B-it-OptiQ-4bit" ;;
+    gemma-26b-moe)  echo "mlx-community/gemma-4-26B-A4B-it-OptiQ-4bit" ;;
+    *) return 1 ;;
+  esac
+}
+MODELS_LIST="scout mistral-medium gemma-31b gemma-26b-moe"
+
+# Default mlx_lm.server flags shared by ALL models. Phase E trimmed the
+# memory- and length-sensitive flags out of here; those are now per-model and
+# emitted by `model_extra_args()` below.
+# - prefill-step-size: large step → faster prefill on Apple Silicon
+# - temp/top-p: tuned for code generation
+DEFAULT_ARGS="--prefill-step-size 4096 --temp 0.2 --top-p 0.95"
+
+# Per-model mlx_lm.server flag dispatch (Phase E). Keep adjacent to lookup_model().
+#
+# These values are tuned for an M5 Max / 128 GB unified-memory Mac (~115 GB usable
+# working set). The previous one-size-fits-all 16 GiB prompt-cache + 8K max-tokens
+# crashed Metal with "Insufficient Memory" while running mistral-medium (73 GB
+# resident) under parallel hermes prefills. Per-model values keep peak unified
+# memory well under the 115 GB ceiling.
+#
+# Quoting note: --chat-template-args takes a JSON string with embedded double
+# quotes and a literal `false` boolean. Bash's command-substitution word-splitting
+# does NOT re-process single quotes, so naive `$(model_extra_args ...)` would
+# leak literal `'{"enable_thinking":` and `false}'` tokens onto the command line.
+# The launch path uses `eval` on the rendered string so the single quotes group
+# the JSON as a single argv element.
+model_extra_args() {
+  case "$1" in
+    scout)
+      echo "--prompt-cache-bytes 8589934592 --prompt-cache-size 2 --max-tokens 4096" ;;
+    mistral-medium)
+      echo "--prompt-cache-bytes 8589934592 --prompt-cache-size 2 --prefill-step-size 2048 --max-tokens 4096" ;;
+    gemma-31b)
+      echo "--prompt-cache-bytes 12884901888 --prompt-cache-size 4 --max-tokens 8192 --chat-template-args '{\"enable_thinking\": false}'" ;;
+    gemma-26b-moe)
+      echo "--prompt-cache-bytes 12884901888 --prompt-cache-size 4 --max-tokens 8192 --chat-template-args '{\"enable_thinking\": false}'" ;;
+    *)
+      # Unknown model name: no per-model flags; backend launches with DEFAULT_ARGS only.
+      # echo (not assignment) so the empty value reaches the caller via $(model_extra_args ...).
+      echo "" ;;
+  esac
+}
+
+# --- helpers: PID file management -----------------------------------------
+
+# Echo the path of any existing backend PID file (mlx-<model>.pid, excluding
+# mlx-shim.pid). Empty output if none. Caller iterates with `for f in $(...)`.
+backend_pid_files() {
+  local f
+  for f in "$MLX_TMP_DIR"/mlx-*.pid; do
+    [ -e "$f" ] || continue
+    [ "$f" = "$SHIM_PID_FILE" ] && continue
+    echo "$f"
+  done
+}
+
+# Read a PID from a file. Empty stdout if file missing or unreadable.
+read_pid() {
+  local f="$1"
+  [ -r "$f" ] || return 0
+  cat "$f" 2>/dev/null
+}
+
+# kill_pid <pid> -- TERM, wait up to 5s, KILL if still alive.
+kill_pid() {
+  local pid="$1"
+  [ -z "$pid" ] && return 0
+  kill -0 "$pid" 2>/dev/null || return 0
+  kill -TERM "$pid" 2>/dev/null || true
+  local i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    kill -0 "$pid" 2>/dev/null || return 0
+    sleep 0.5
+  done
+  kill -KILL "$pid" 2>/dev/null || true
+}
+
+# Stop the shim using its PID file. Returns 0 if anything was killed or the
+# file was just stale; 1 if no PID file existed (caller may fall back to pgrep).
+stop_shim_via_pidfile() {
+  [ -f "$SHIM_PID_FILE" ] || return 1
+  local pid
+  pid=$(read_pid "$SHIM_PID_FILE")
+  kill_pid "$pid"
+  rm -f "$SHIM_PID_FILE"
+  return 0
+}
+
+# Stop every backend PID file found. Returns 0 if any was found, 1 otherwise.
+stop_backend_via_pidfiles() {
+  local any=1
+  local f pid
+  for f in $(backend_pid_files); do
+    any=0
+    pid=$(read_pid "$f")
+    kill_pid "$pid"
+    rm -f "$f"
+  done
+  return $any
+}
+
+# Best-effort fallback when PID files are missing (partial-state systems).
+fallback_pgrep_kill() {
+  local pat="$1"
+  pgrep -f "$pat" > /dev/null 2>&1 || return 1
+  pkill -f "$pat" || true
+  local i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    pgrep -f "$pat" > /dev/null 2>&1 || return 0
+    sleep 0.5
+  done
+  pkill -KILL -f "$pat" 2>/dev/null || true
+  return 0
+}
+
+# Full --stop sequence. Shim first, then backend.
+stop_all() {
+  local killed_anything=1
+  if stop_shim_via_pidfile; then
+    killed_anything=0
+  else
+    if fallback_pgrep_kill "shim\.server"; then
+      killed_anything=0
+    fi
+  fi
+  if stop_backend_via_pidfiles; then
+    killed_anything=0
+  else
+    if fallback_pgrep_kill "mlx_lm\.server"; then
+      killed_anything=0
+    fi
+  fi
+  return $killed_anything
+}
+
+# --- helpers: readiness probes --------------------------------------------
+
+# wait_for_url <url> <timeout_seconds>
+# Polls every 0.5 s with curl --max-time 1. Returns 0 on first 2xx, 1 on timeout.
+wait_for_url() {
+  local url="$1"
+  local secs="$2"
+  # Cap iteration count = secs * 2 (0.5 s interval).
+  local max_iters
+  max_iters=$(( secs * 2 ))
+  [ "$max_iters" -lt 1 ] && max_iters=1
+  local i=0
+  while [ "$i" -lt "$max_iters" ]; do
+    if curl -fs --max-time 1 "$url" > /dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.5
+    i=$(( i + 1 ))
+  done
+  return 1
+}
+
+# --- subcommands ----------------------------------------------------------
+
+cmd_stop() {
+  if stop_all; then
+    echo "MLX server stack stopped"
+  else
+    echo "No MLX server processes found"
+  fi
+}
+
+# Print one line summarizing a process. <label> <pid_file> [<port>] [<extra>]
+report_process() {
+  local label="$1"
+  local pid_file="$2"
+  local port="$3"
+  local extra="$4"
+  local pid
+  if [ ! -f "$pid_file" ]; then
+    echo "${label}: stopped"
+    return 0
+  fi
+  pid=$(read_pid "$pid_file")
+  if [ -z "$pid" ]; then
+    echo "${label}: stopped (stale pid file)"
+    rm -f "$pid_file"
+    return 0
+  fi
+  if kill -0 "$pid" 2>/dev/null; then
+    if [ -n "$port" ] && [ -n "$extra" ]; then
+      echo "${label}: running (pid $pid, port $port, $extra)"
+    elif [ -n "$port" ]; then
+      echo "${label}: running (pid $pid, port $port)"
+    else
+      echo "${label}: running (pid $pid)"
+    fi
+  else
+    echo "${label}: stopped (stale pid file)"
+    rm -f "$pid_file"
+  fi
+}
+
+cmd_status() {
+  # Backend: there should be at most one mlx-<model>.pid file. Loop in case of leftovers.
+  local f any=1 model_name
+  for f in $(backend_pid_files); do
+    any=0
+    # Derive model name from file name: mlx-<NAME>.pid
+    model_name=$(basename "$f" .pid)
+    model_name="${model_name#mlx-}"
+    report_process "backend" "$f" "$BACKEND_PORT" "model $model_name"
+  done
+  if [ "$any" -ne 0 ]; then
+    echo "backend: stopped"
+  fi
+  report_process "shim   " "$SHIM_PID_FILE" "$SHIM_PORT"
+}
+
+# --- option parsing -------------------------------------------------------
+
+case "${1:-}" in
+  --stop)
+    cmd_stop
+    exit 0
+    ;;
+  --status)
+    cmd_status
+    exit 0
+    ;;
+  --help|-h)
+    sed -n '2,17p' "$0" | sed 's/^# //; s/^#//'
+    echo ""
+    echo "Available models:"
+    for k in $MODELS_LIST; do printf "  %-16s %s\n" "$k" "$(lookup_model "$k")"; done
+    exit 0
+    ;;
+  "")
+    echo "usage: mlx-serve [--stop|--status|--help] <model_name>" >&2
+    echo "models: $MODELS_LIST" >&2
+    exit 2
+    ;;
+esac
+
+# --- model launch path ----------------------------------------------------
+
+if [ ! -d "$VENV" ]; then
+  echo "mlx venv not found at $VENV" >&2
+  exit 1
+fi
+
+# shellcheck disable=SC1091
+. "$VENV/bin/activate"
+
+# Auto-stop any running backend+shim before launching a new one (Phase C: this
+# now tears down the dual-process pair, not just mlx_lm.server).
+echo "Stopping any existing MLX server stack..."
+stop_all || true
+
+NAME="$1"; shift
+if ! MODEL_PATH=$(lookup_model "$NAME" 2>/dev/null); then
+  echo "Unknown model: $NAME" >&2
+  echo "Available: $MODELS_LIST" >&2
+  exit 1
+fi
+
+BACKEND_LOG="$MLX_TMP_DIR/mlx-${NAME}.log"
+BACKEND_PID_FILE="$MLX_TMP_DIR/mlx-${NAME}.pid"
+
+MLX_PREPARE_BIN="${MLX_PREPARE_BIN:-$VENV/bin/mlx-prepare}"
+
+# Ensure model is fully downloaded before starting the server.
+echo "Verifying download for [$NAME]..."
+if ! "$MLX_PREPARE_BIN" "$MODEL_PATH" 2>&1 | tee -a "$BACKEND_LOG"; then
+  echo "ERROR: mlx-prepare failed for $MODEL_PATH (see $BACKEND_LOG)" >&2
+  exit 1
+fi
+
+# --- start backend -------------------------------------------------------
+
+echo "Starting MLX backend [$NAME] on $BACKEND_HOST:$BACKEND_PORT (model: $MODEL_PATH, log: $BACKEND_LOG)"
+# `eval` is required here so the single-quoted JSON in model_extra_args (e.g.
+# `--chat-template-args '{"enable_thinking": false}'`) becomes a single argv
+# element instead of being word-split into broken tokens. All other inputs are
+# either fixed strings or values we control (model name from lookup_model).
+EXTRA_ARGS=$(model_extra_args "$NAME")
+# Forward any caller-supplied trailing args verbatim through "$@". Quote them
+# for eval so they survive a second round of parsing.
+TRAILING=""
+for a in "$@"; do
+  TRAILING="$TRAILING $(printf "%q" "$a")"
+done
+eval "nohup mlx_lm.server \
+  --model \"\$MODEL_PATH\" \
+  --host \"\$BACKEND_HOST\" \
+  --port \"\$BACKEND_PORT\" \
+  \$DEFAULT_ARGS \
+  $EXTRA_ARGS \
+  $TRAILING \
+  >> \"\$BACKEND_LOG\" 2>&1 &"
+BACKEND_PID=$!
+echo "$BACKEND_PID" > "$BACKEND_PID_FILE"
+
+# --- backend readiness probe --------------------------------------------
+
+# Default 60 s; allow override up to 600 s via MLX_BACKEND_READY_TIMEOUT.
+READY_TIMEOUT="${MLX_BACKEND_READY_TIMEOUT:-60}"
+# Sanitize: numeric only, clamp to [1, 600].
+case "$READY_TIMEOUT" in
+  ''|*[!0-9]*) READY_TIMEOUT=60 ;;
+esac
+[ "$READY_TIMEOUT" -lt 1 ] && READY_TIMEOUT=1
+[ "$READY_TIMEOUT" -gt 600 ] && READY_TIMEOUT=600
+
+echo "Probing backend readiness at http://$BACKEND_HOST:$BACKEND_PORT/v1/models (timeout ${READY_TIMEOUT}s)..."
+if ! wait_for_url "http://$BACKEND_HOST:$BACKEND_PORT/v1/models" "$READY_TIMEOUT"; then
+  echo "ERROR: backend did not become ready within ${READY_TIMEOUT}s; tail of log:" >&2
+  tail -n 30 "$BACKEND_LOG" >&2 || true
+  kill_pid "$BACKEND_PID"
+  rm -f "$BACKEND_PID_FILE"
+  exit 1
+fi
+echo "Backend ready."
+
+# --- start shim ----------------------------------------------------------
+
+echo "Starting shim on :$SHIM_PORT (log: $SHIM_LOG)"
+# `exec` inside the subshell replaces it with python so $! is the actual
+# python PID (not the wrapper subshell). nohup detaches it from this terminal.
+( cd "$MLX_PROJECT_DIR" && \
+  exec env \
+    MLX_BACKEND_URL="http://$BACKEND_HOST:$BACKEND_PORT" \
+    MLX_SHIM_PORT="$SHIM_PORT" \
+    MLX_PROJECT_DIR="$MLX_PROJECT_DIR" \
+    nohup "$VENV/bin/python" -m aeo_mlx_lab.shim.server > "$SHIM_LOG" 2>&1 ) &
+SHIM_PID=$!
+echo "$SHIM_PID" > "$SHIM_PID_FILE"
+
+# --- shim readiness probe -----------------------------------------------
+
+echo "Probing shim readiness at http://127.0.0.1:$SHIM_PORT/healthz (timeout 10s)..."
+if ! wait_for_url "http://127.0.0.1:$SHIM_PORT/healthz" 10; then
+  echo "ERROR: shim did not become ready within 10s; tail of shim log:" >&2
+  tail -n 30 "$SHIM_LOG" >&2 || true
+  # Tear both down (shim first per drain order, but here both are failing).
+  kill_pid "$SHIM_PID"
+  rm -f "$SHIM_PID_FILE"
+  kill_pid "$BACKEND_PID"
+  rm -f "$BACKEND_PID_FILE"
+  exit 1
+fi
+echo "Shim ready."
+
+echo ""
+echo "MLX stack up:"
+echo "  backend  pid $BACKEND_PID  http://$BACKEND_HOST:$BACKEND_PORT  ($NAME)"
+echo "  shim     pid $SHIM_PID  http://127.0.0.1:$SHIM_PORT          (clients hit this)"

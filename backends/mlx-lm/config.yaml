@@ -1,0 +1,51 @@
+# mlx-lm model registry / per-model defaults
+#
+# NOTE: This YAML is currently inert — stock `mlx_lm.server` (0.31.x) does NOT
+# accept --config and does not read this file. It is kept as the source of
+# truth for per-model intent (defaults, capabilities) and to be forward-
+# compatible with vLLM-style multi-model forks (e.g. mlx-omni-server) if/when
+# we adopt one. See kb/server-flags-and-versions.md.
+#
+# Reasoning-mode parameters per model are documented here to match each
+# model's actual chat_template.jinja. Default for thinking-capable models is
+# OFF, so OpenAI-shape clients receive a populated `message.content`. See
+# kb/reasoning-modes-per-model.md.
+
+server:
+  host: "127.0.0.1"
+  port: 8080
+  log_level: "INFO"
+
+models:
+  # Llama 4 Scout — 109B MoE / 17B active, 10M ctx, vision-capable.
+  # No built-in thinking mode; chain-of-thought is prompt-driven only.
+  - model_path: "mlx-community/Llama-4-Scout-17B-16E-Instruct-4bit"
+    model_type: "lm"
+    served_model_name: "scout"
+    # No chat_template_kwargs — model has no thinking flag.
+
+  # Mistral Medium 3.5 — 128B dense, 256K ctx.
+  # Reasoning param: reasoning_effort ∈ {"none", "high"} (template raises on others).
+  - model_path: "mlx-community/Mistral-Medium-3.5-128B-4bit"
+    model_type: "lm"
+    served_model_name: "mistral-medium"
+    chat_template_kwargs:
+      reasoning_effort: "none"   # override per-request to "high" for hard tasks
+
+  # Gemma 4 31B Dense OptiQ — Apple-Silicon-optimized mixed precision.
+  # Reasoning param: enable_thinking (bool).
+  # Quirk: a system message OR a tools field also triggers thinking, regardless
+  # of this flag (Gemma chat-template OR-condition; see KB).
+  - model_path: "mlx-community/gemma-4-31B-it-OptiQ-4bit"
+    model_type: "lm"
+    served_model_name: "gemma-31b"
+    chat_template_kwargs:
+      enable_thinking: false
+
+  # Gemma 4 26B A4B MoE OptiQ — 4B active, 256K ctx, fastest tok/s.
+  # Same reasoning param + quirk as gemma-31b.
+  - model_path: "mlx-community/gemma-4-26B-A4B-it-OptiQ-4bit"
+    model_type: "lm"
+    served_model_name: "gemma-26b-moe"
+    chat_template_kwargs:
+      enable_thinking: false

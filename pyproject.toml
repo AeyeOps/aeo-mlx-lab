@@ -1,0 +1,85 @@
+[project]
+name = "aeo-mlx-lab"
+version = "0.1.0"
+description = "Local LLM serving lab for Apple Silicon: shim, mlx-lm launcher, SwiftBar plugin, knowledge base, e2e validation."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.14"
+authors = [{ name = "AeyeOps" }]
+keywords = ["mlx", "apple-silicon", "llm", "openai-compat", "local-inference"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: MacOS X",
+  "Intended Audience :: Developers",
+  "Operating System :: MacOS :: MacOS X",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.14",
+]
+
+# Runtime dependencies. Ranges in pyproject; uv.lock pins exact versions.
+# Convention: floor at current minor, ceiling at next major. mlx-lm specifically
+# pins the (Python, mlx, transformers) tuple — see kb/server-flags-and-versions.md.
+# The shim, mlx_prepare, and mlx-lm backend share one venv so mlx-lm's transitive
+# deps (mlx, transformers, tokenizers, etc.) are also locked.
+dependencies = [
+  "mlx-lm>=0.31,<1.0",
+  "starlette>=0.52,<1.0",
+  "httpx>=0.28,<1.0",
+  "uvicorn[standard]>=0.46,<1.0",
+  "huggingface-hub>=1.14,<2.0",
+  "python-dotenv>=1.1,<2.0",
+]
+
+[project.scripts]
+mlx-shim    = "aeo_mlx_lab.shim.server:main"
+mlx-prepare = "aeo_mlx_lab.mlx_prepare:main"
+
+[project.urls]
+Homepage   = "https://github.com/AeyeOps/aeo-mlx-lab"
+Repository = "https://github.com/AeyeOps/aeo-mlx-lab"
+Changelog  = "https://github.com/AeyeOps/aeo-mlx-lab/blob/main/CHANGELOG.md"
+Roadmap    = "https://github.com/AeyeOps/aeo-mlx-lab/blob/main/docs/ROADMAP.md"
+
+[build-system]
+requires = ["uv_build>=0.5,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = "src"
+module-name = "aeo_mlx_lab"
+
+[dependency-groups]
+dev = [
+  "ruff>=0.15,<1.0",
+  "ty>=0.0,<1.0",  # Astral type checker — pre-1.0, currently in beta
+]
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+src = ["src"]
+
+[tool.ruff.lint]
+select = [
+  "E",   # pycodestyle errors
+  "F",   # pyflakes
+  "I",   # isort
+  "B",   # bugbear
+  "UP",  # pyupgrade
+  "SIM", # simplify
+  "RUF", # ruff-specific
+]
+ignore = [
+  "E501", # line-too-long handled by formatter
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.ty]
+# Astral type checker — minimal config; defaults are sensible.
+# Run: ty check src/

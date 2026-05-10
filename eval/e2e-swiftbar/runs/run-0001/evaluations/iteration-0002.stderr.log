@@ -1,0 +1,35 @@
+[eval] === evaluating gemma-26b-moe ===
+[eval] [gemma-26b-moe] pre-flight stop
+[eval] [gemma-26b-moe] SwiftBar click
+[eval] [gemma-26b-moe] waiting for gemma-26b-moe stack (timeout=600s)
+[eval] [gemma-26b-moe] stack ready (PID file present, healthz 200)
+[eval] [gemma-26b-moe] invoking semantic judge
+[eval] [gemma-26b-moe] stopping stack
+[eval] [gemma-26b-moe] pass=false instr=true norefusal=true perf=false [72.4 vs 74 tok/s] sem=true [10/10] traffic=true nogaps=true
+[eval] === evaluating gemma-31b ===
+[eval] [gemma-31b] pre-flight stop
+[eval] [gemma-31b] SwiftBar click
+[eval] [gemma-31b] waiting for gemma-31b stack (timeout=600s)
+[eval] [gemma-31b] stack ready (PID file present, healthz 200)
+[eval] [gemma-31b] first-run baseline: 18.0 tok/s stored
+[eval] [gemma-31b] invoking semantic judge
+[eval] [gemma-31b] stopping stack
+[eval] [gemma-31b] pass=true instr=true norefusal=true perf=true [18.0 vs 0 tok/s] sem=true [10/10] traffic=true nogaps=true
+[eval] === evaluating mistral-medium ===
+[eval] [mistral-medium] pre-flight stop
+[eval] [mistral-medium] SwiftBar click
+[eval] [mistral-medium] waiting for mistral-medium stack (timeout=600s)
+[eval] [mistral-medium] stack ready (PID file present, healthz 200)
+[eval] [mistral-medium] first-run baseline: 4.7 tok/s stored
+[eval] [mistral-medium] invoking semantic judge
+[eval] [mistral-medium] stopping stack
+[eval] [mistral-medium] pass=true instr=true norefusal=true perf=true [4.7 vs 0 tok/s] sem=true [10/10] traffic=true nogaps=true
+[eval] === evaluating scout (advisory) ===
+[eval] [scout] pre-flight stop
+[eval] [scout] SwiftBar click
+[eval] [scout] waiting for scout stack (timeout=600s)
+[eval] [scout] stack ready (PID file present, healthz 200)
+[eval] [scout] invoking semantic judge
+[eval] [scout] stopping stack
+[eval] [scout] pass=true instr=true norefusal=true perf=true [28.3 vs 9.8 tok/s] sem=true [10/10] traffic=true nogaps=true
+[eval] EXIT trap: stopping any running stack

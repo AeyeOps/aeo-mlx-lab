@@ -1,0 +1,36 @@
+# Project-local runtime artifacts
+tmp/
+
+# Per-developer AI-assist conventions (kept locally, not shipped)
+CLAUDE.md
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Editors / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OMC skill state and transient artifacts
+.omc/
+
+# Secrets — defensive patterns. None should ever land in this repo (judge
+# tokens live in ~/.config/secrets/keys.env, which is out-of-tree). These
+# patterns catch accidents before they happen.
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+id_rsa
+id_ed25519
+credentials*
+secrets*

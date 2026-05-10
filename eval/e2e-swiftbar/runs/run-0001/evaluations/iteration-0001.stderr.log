@@ -1,0 +1,24 @@
+[eval] === evaluating gemma-26b-moe ===
+[eval] [gemma-26b-moe] SwiftBar click
+[eval] [gemma-26b-moe] waiting for stack (timeout=600s)
+[eval] [gemma-26b-moe] stack ready
+[eval] [gemma-26b-moe] FAIL: loaded model mismatch (expected mlx-community/gemma-4-26B-A4B-it-OptiQ-4bit)
+[eval] === evaluating gemma-31b ===
+[eval] [gemma-31b] SwiftBar click
+[eval] [gemma-31b] waiting for stack (timeout=600s)
+[eval] [gemma-31b] stack ready
+[eval] [gemma-31b] FAIL: loaded model mismatch (expected mlx-community/gemma-4-31B-it-OptiQ-4bit)
+[eval] === evaluating mistral-medium ===
+[eval] [mistral-medium] SwiftBar click
+[eval] [mistral-medium] waiting for stack (timeout=600s)
+[eval] [mistral-medium] stack ready
+[eval] [mistral-medium] FAIL: loaded model mismatch (expected mlx-community/Mistral-Medium-3.5-128B-4bit)
+[eval] === evaluating scout (advisory) ===
+[eval] [scout] SwiftBar click
+[eval] [scout] waiting for stack (timeout=600s)
+[eval] [scout] stack ready
+[eval] [scout] first-run baseline: 12.2 tok/s stored
+[eval] [scout] invoking semantic judge
+[eval] [scout] stopping stack
+[eval] [scout] pass=true instr=true norefusal=true perf=true [12.2 vs 0 tok/s] sem=true [10/10] traffic=true nogaps=true
+[eval] EXIT trap: stopping any running stack
